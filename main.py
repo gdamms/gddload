@@ -29,7 +29,7 @@ class File:
         self.size = 0
         self.type = FileType.UNKNOWN
         self.sha256 = ''
-        self.progress = 0.0
+        self.done_size = 0
         self.status = FileStatus.PENDING
         self.children = []
 
@@ -40,6 +40,12 @@ class File:
     @property
     def formatted_progress(self):
         return format_progress(self.progress)
+
+    @property
+    def progress(self):
+        if self.type == FileType.FOLDER:
+            self.done_size = sum([child.downloaded_size for child in self.children])
+        return self.done_size / self.size if self.size > 0 else 1.0
 
 
 def parse_args() -> None:
@@ -86,32 +92,12 @@ BAR_LENGTH = 4
 
 status = 'idle'
 
-def update_progress(file: File) -> None:
-    """Update the progress of the file.
-
-    Args:
-        file (File): The file to update.
-    """
-    if file.type == FileType.FOLDER:
-        warning = False
-        for child in file.children:
-            update_progress(child)
-            if child.status == FileStatus.CORRUPTED or child.status == FileStatus.WARNING:
-                warning = True
-        if file.size == 0:
-            file.progress = 1
-        else:
-            file.progress = sum([child.progress * child.size for child in file.children]) / file.size
-        if warning:
-            file.status = FileStatus.WARNING
-
 
 def update_root_progress():
     global root_file
     if not root_file:
         # TODO: better error handling
         raise Exception('Root file is not set')
-    update_progress(root_file)
 
 
 def download_folder(file: File, save_path: str) -> None:
@@ -152,7 +138,7 @@ def download_file(file: File, save_path: str) -> None:
             file.status = FileStatus.CORRUPTED
 
         # TODO: overwrite
-        file.progress = 1
+        file.done_size = file.size
         update_root_progress()
         print_root_file()
         return
@@ -164,7 +150,7 @@ def download_file(file: File, save_path: str) -> None:
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            file.progress = status.progress()
+            file.done_size = status.resumable_progress
             update_root_progress()
             print_root_file()
 
@@ -232,7 +218,7 @@ def scan_file(file: File):
             file.type = FileType.FILE
             file.size = int(response['size'])
         file.children = []
-        file.progress = 0
+        file.done_size = 0
         file.sha256 = response.get('sha256Checksum', '')
         file.status = FileStatus.PENDING
 
@@ -271,7 +257,7 @@ def scan_file(file: File):
 def print_root_file():
     global root_file, status
     if not root_file:
-        raise Exception('Root file is not set') # TODO: better error handling
+        raise Exception('Root file is not set')  # TODO: better error handling
     print('\x1b[0;0H\x1b[J', end='', flush=True)
     print(f"Status: {status}", flush=True)
     print_file(root_file)
