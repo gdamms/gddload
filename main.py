@@ -7,13 +7,28 @@ import hashlib
 import argparse
 
 
+class ANSI:
+    DEFAULT = '\x1b[0m'
+    GREY = '\x1b[90m'
+    RED = '\x1b[91m'
+    GREEN = '\x1b[92m'
+    YELLOW = '\x1b[93m'
+    BLUE = '\x1b[94m'
+    MAGENTA = '\x1b[95m'
+    CYAN = '\x1b[96m'
+    WHITE = '\x1b[97m'
+
+
 class FileStatus:
     PENDING = 0
     DOWNLOADING = 1
     DOWNLOADED = 2
-    ALREADY_DOWNLOADED = 3
+    ALREADY_PRESENT = 3
     CORRUPTED = 4
     WARNING = 5
+    FAILED = 6
+    CHECKED = 7
+    ALREADY_CHECKED = 8
 
 
 class FileType:
@@ -58,7 +73,7 @@ def parse_args() -> None:
     parser.add_argument('--overwrite', action='store_true',
                         help='Overwrite the file if it already exists but does not match the sha256')
     parser.add_argument('--force', action='store_true', help='Force the download of the file even if it already exists')
-    parser.add_argument('--retry', type=int, default=1,
+    parser.add_argument('--retry', type=int, default=0,
                         help='The number of retries in case of error. (implies --check)')
     args = parser.parse_args()
 
@@ -78,16 +93,6 @@ creds = service_account.Credentials.from_service_account_file(
 )
 service = build("drive", "v3", credentials=creds)
 root_file = None
-
-ANSI_COLORS = {
-    'pending': '\033[96m',
-    'downloading': '\033[94m',
-    'downloaded': '\033[92m',
-    'done': '\033[92m',
-    'corrupted': '\033[91m',
-    'default': '\033[0m',
-    'warning': '\033[93m',
-}
 BAR_LENGTH = 4
 
 status = 'idle'
@@ -116,34 +121,74 @@ def download_folder(file: File, save_path: str) -> None:
     file.status = FileStatus.DOWNLOADED
 
 
-def download_file(file: File, save_path: str) -> None:
+def check_file(file: File, file_path: str) -> bool:
+    """Check the integrity of a file from Google Drive.
+
+    Args:
+        file (File): The file to check.
+        file_path (str): The path to the file.
+
+    Returns:
+        bool: True if the file is correct, False otherwise.
+    """
+    if not os.path.exists(file_path):
+        raise Exception(f'File {file_path} does not exist')
+
+    with open(file_path, 'rb') as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+
+    return sha256 == file.sha256
+
+
+def precheck_file(file: File, file_path: str) -> bool:
+    """Precheck the integrity of a file from Google Drive.
+
+    Args:
+        file (File): The file to check.
+        file_path (str): The path to the file.
+
+    Returns:
+        bool: True if the file is correct, False otherwise.
+    """
+    checked = check_file(file, file_path)
+    if checked:
+        file.status = FileStatus.ALREADY_CHECKED
+        file.done_size = file.size
+    else:
+        file.status = FileStatus.CORRUPTED
+    update_root_progress()
+    print_root_file()
+    return checked
+
+
+def postcheck_file(file: File, file_path: str) -> bool:
+    """Postcheck the integrity of a file from Google Drive.
+
+    Args:
+        file (File): The file to check.
+        file_path (str): The path to the file.
+
+    Returns:
+        bool: True if the file is correct, False otherwise.
+    """
+    checked = check_file(file, file_path)
+    if checked:
+        file.status = FileStatus.CHECKED
+        file.done_size = file.size
+    else:
+        file.status = FileStatus.FAILED
+    update_root_progress()
+    print_root_file()
+    return checked
+
+
+def download_file_simple(file: File, file_path: str) -> None:
     """Download a file from Google Drive.
 
     Args:
         file (File): The file to download.
-        save_path (str): The path to save the file.
+        file_path (str): The path to save the file.
     """
-    global service
-
-    file_path = os.path.join(save_path, file.name)
-
-    if os.path.exists(file_path):
-        # check file integrity
-        # TODO: is check needed?
-        with open(file_path, 'rb') as f:
-            sha256 = hashlib.sha256(f.read()).hexdigest()
-        if sha256 == file.sha256:
-            file.status = FileStatus.ALREADY_DOWNLOADED
-        else:
-            file.status = FileStatus.CORRUPTED
-
-        # TODO: overwrite
-        file.done_size = file.size
-        update_root_progress()
-        print_root_file()
-        return
-
-    # download the file
     request = service.files().get_media(fileId=file.id)
     with open(file_path, 'wb') as f:
         downloader = MediaIoBaseDownload(f, request)
@@ -153,8 +198,65 @@ def download_file(file: File, save_path: str) -> None:
             file.done_size = status.resumable_progress
             update_root_progress()
             print_root_file()
-
     file.status = FileStatus.DOWNLOADED
+
+
+def download_file_with_check(file: File, file_path: str) -> bool:
+    """Download a file from Google Drive. Check the integrity of the file.
+
+    Args:
+        file (File): The file to download.
+        file_path (str): The path to save the file.
+
+    Returns:  
+        bool: True if the file is correct, False otherwise.
+    """
+    download_file_simple(file, file_path)
+    return postcheck_file(file, file_path)
+
+
+def download_file_with_retry(file: File, file_path: str, retry: int) -> bool:
+    """Download a file from Google Drive. Retry in case of error.
+
+    Args:
+        file (File): The file to download.
+        file_path (str): The path to save the file.
+        retry (int): The number of retries.
+
+    Returns:
+        bool: True if the file is correct, False otherwise.
+    """
+    if retry == 0:
+        return download_file_with_check(file, file_path)
+
+    if download_file_with_check(file, file_path):
+        return True
+    else:
+        return download_file_with_retry(file, file_path, retry - 1)
+
+
+def download_file(file: File, save_path: str) -> None:
+    """Download a file from Google Drive.
+
+    Args:
+        file (File): The file to download.
+        save_path (str): The path to save the file in (ie. the folder).
+    """
+    global service
+
+    file_path = os.path.join(save_path, file.name)
+
+    # pre check
+    precheck = False
+    if not config['force'] and (config['check'] or config['overwrite'] or config['retry'] > 0):
+        precheck = precheck_file(file, file_path)
+
+    # download
+    if config['force'] or (not precheck and config['overwrite']):
+        if config['check'] or config['retry'] > 0:
+            download_file_with_retry(file, file_path, config['retry'])
+        else:
+            download_file_simple(file, file_path)
 
 
 def download_file_recursive(file: File, save_path: str) -> None:
