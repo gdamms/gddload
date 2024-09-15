@@ -30,6 +30,29 @@ class FileStatus:
     CHECKED = 7
     ALREADY_CHECKED = 8
 
+    @staticmethod
+    def ansify(status: int) -> str:
+        if status == FileStatus.PENDING:
+            return ANSI.CYAN
+        elif status == FileStatus.DOWNLOADING:
+            return ANSI.BLUE
+        elif status == FileStatus.DOWNLOADED:
+            return ANSI.GREEN
+        elif status == FileStatus.ALREADY_PRESENT:
+            return ANSI.GREEN
+        elif status == FileStatus.CORRUPTED:
+            return ANSI.RED
+        elif status == FileStatus.WARNING:
+            return ANSI.YELLOW
+        elif status == FileStatus.FAILED:
+            return ANSI.RED
+        elif status == FileStatus.CHECKED:
+            return ANSI.GREEN
+        elif status == FileStatus.ALREADY_CHECKED:
+            return ANSI.GREEN
+        else:
+            return ANSI.DEFAULT
+
 
 class FileType:
     UNKNOWN = -1
@@ -47,6 +70,24 @@ class File:
         self.done_size = 0
         self.status = FileStatus.PENDING
         self.children = []
+    
+    def print(self, indent=''):
+        """Print the file info.
+
+        Args:
+            indent (str, optional): The parent indetation. Defaults to ''.
+        """
+        # TODO: colors
+        color = FileStatus.ansify(self.status)
+        text = indent + color + f"{self.name} - {self.formatted_size} {self.formatted_progress}" + ANSI.DEFAULT
+        print(text, flush=True)
+        if indent == '':
+            child_indent = ''
+        else:
+            child_indent = indent[:-2] + ('  ' if indent[-2:] == '└ ' else '│ ')
+        for child_i, child in enumerate(self.children):
+            child_indent_i = '└ ' if child_i == len(self.children) - 1 else '├ '
+            child.print(child_indent + child_indent_i)
 
     @property
     def formatted_size(self):
@@ -59,11 +100,11 @@ class File:
     @property
     def progress(self):
         if self.type == FileType.FOLDER:
-            self.done_size = sum([child.downloaded_size for child in self.children])
+            self.done_size = sum([child.done_size for child in self.children])
         return self.done_size / self.size if self.size > 0 else 1.0
 
 
-def parse_args() -> None:
+def parse_args():
     """Parse the command line arguments."""
 
     parser = argparse.ArgumentParser(description='Download files from Google Drive')
@@ -105,7 +146,7 @@ def update_root_progress():
         raise Exception('Root file is not set')
 
 
-def download_folder(file: File, save_path: str) -> None:
+def download_folder(file: File, save_path: str):
     """Download a folder from Google Drive.
 
     Args:
@@ -182,7 +223,7 @@ def postcheck_file(file: File, file_path: str) -> bool:
     return checked
 
 
-def download_file_simple(file: File, file_path: str) -> None:
+def download_file_simple(file: File, file_path: str):
     """Download a file from Google Drive.
 
     Args:
@@ -235,7 +276,7 @@ def download_file_with_retry(file: File, file_path: str, retry: int) -> bool:
         return download_file_with_retry(file, file_path, retry - 1)
 
 
-def download_file(file: File, save_path: str) -> None:
+def download_file(file: File, save_path: str):
     """Download a file from Google Drive.
 
     Args:
@@ -259,7 +300,7 @@ def download_file(file: File, save_path: str) -> None:
             download_file_simple(file, file_path)
 
 
-def download_file_recursive(file: File, save_path: str) -> None:
+def download_file_recursive(file: File, save_path: str):
     """Download a file from Google Drive.
 
     Args:
@@ -362,26 +403,7 @@ def print_root_file():
         raise Exception('Root file is not set')  # TODO: better error handling
     print('\x1b[0;0H\x1b[J', end='', flush=True)
     print(f"Status: {status}", flush=True)
-    print_file(root_file)
-
-
-def print_file(file: File, indent=''):
-    """Print the file info.
-
-    Args:
-        file (File): The file to print.
-        indent (str, optional): The parent indetation. Defaults to ''.
-    """
-    # TODO: colors
-    text = indent + f"{file.name} - {file.formatted_size} {file.formatted_progress}"
-    print(text, flush=True)
-    if indent == '':
-        child_indent = ''
-    else:
-        child_indent = indent[:-2] + ('  ' if indent[-2:] == '└ ' else '│ ')
-    for child_i, child in enumerate(file.children):
-        child_indent_i = '└ ' if child_i == len(file.children) - 1 else '├ '
-        print_file(child, child_indent + child_indent_i)
+    root_file.print()
 
 
 def format_size(size: float) -> str:
