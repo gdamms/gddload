@@ -37,6 +37,8 @@ class Size:
 class Progress:
     """A progress bar."""
 
+    BAR_LENGTH = 4
+
     def __init__(self, progress: float) -> None:
         """Initialize the progress bar.
 
@@ -62,9 +64,10 @@ class Progress:
         Returns:
             str: The progress bar as a string.
         """
-        bar = '━' * int(BAR_LENGTH * self.progress) + ('╾' if self.progress *
-                                                       BAR_LENGTH % 1 >= 0.5 else '─') + '─' * BAR_LENGTH
-        bar = bar[:BAR_LENGTH]
+        bar = '━' * int(Progress.BAR_LENGTH * self.progress) \
+            + ('╾' if self.progress * Progress.BAR_LENGTH % 1 >= 0.5 else '─') \
+            + '─' * Progress.BAR_LENGTH
+        bar = bar[:Progress.BAR_LENGTH]
         return f"{bar} {100*self.progress:.2f}%"
 
 
@@ -455,7 +458,6 @@ creds = service_account.Credentials.from_service_account_file(
 )
 service = build("drive", "v3", credentials=creds)
 root_file = None
-BAR_LENGTH = 4
 
 
 def main():
