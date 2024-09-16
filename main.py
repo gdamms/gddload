@@ -58,15 +58,25 @@ class FileType:
 
 
 class File:
-    def __init__(self, id: str):
+    def __init__(self, id: str, dirname: str):
         self.id = id
+        self.dirname = dirname
         self.name = ''
-        self.size = 0
+        self._size = 0
         self.type = FileType.UNKNOWN
         self.sha256 = ''
         self.done_size = 0
         self.status = FileStatus.PENDING
         self.children = []
+
+    def set_size(self, size: int):
+        self._size = size
+
+    @property
+    def size(self):
+        if self.type == FileType.FOLDER:
+            self._size = sum([child.size for child in self.children])
+        return self._size
 
     def print(self, indent=''):
         """Print the file info.
@@ -74,7 +84,6 @@ class File:
         Args:
             indent (str, optional): The parent indetation. Defaults to ''.
         """
-        # TODO: colors
         color = FileStatus.ansify(self.status)
         text = indent + color + f"{self.name} - {self.formatted_size} {self.formatted_progress}" + ANSI.DEFAULT
         print(text, flush=True)
@@ -85,6 +94,32 @@ class File:
         for child_i, child in enumerate(self.children):
             child_indent_i = '└ ' if child_i == len(self.children) - 1 else '├ '
             child.print(child_indent + child_indent_i)
+
+    def should_download(self) -> bool:
+        """Check if the file should be downloaded.
+
+        Returns:
+            bool: True if the file should be downloaded, False otherwise.
+        """
+        assert self.type == FileType.FILE
+
+        if config['force']:
+            return True
+
+        if self.status == FileStatus.PENDING:
+            return True
+
+        if self.status == FileStatus.CORRUPTED or self.status == FileStatus.ALREADY_PRESENT:
+            return config['overwrite']
+
+        if self.status == FileStatus.ALREADY_CHECKED:
+            return False
+
+        raise Exception(f'Unexpected status {self.status}')
+
+    @property
+    def path(self):
+        return os.path.join(self.dirname, self.name)
 
     @property
     def formatted_size(self):
@@ -107,9 +142,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Download files from Google Drive')
     parser.add_argument('file_id', type=str, help='The Google Drive file ID')
     parser.add_argument('--save_path', type=str, default='.', help='The path to save the files')
-    parser.add_argument('--check', action='store_true', help='Check the sha256 of the files')
+    parser.add_argument('--check', action='store_true', help='Check the sha256 of the files before and after download')
     parser.add_argument('--overwrite', action='store_true',
-                        help='Overwrite the file if it already exists but does not match the sha256')
+                        help='Overwrite the file if it already exists. If used with --check, only files that are corrupted will be overwritten')
     parser.add_argument('--force', action='store_true', help='Force the download of the file even if it already exists')
     parser.add_argument('--retry', type=int, default=0,
                         help='The number of retries in case of error. (implies --check)')
@@ -136,187 +171,152 @@ BAR_LENGTH = 4
 status = 'idle'
 
 
-def update_root_progress():
-    global root_file
-    if not root_file:
-        # TODO: better error handling
-        raise Exception('Root file is not set')
-
-
-def download_folder(file: File, save_path: str):
+def download_folder(file: File):
     """Download a folder from Google Drive.
 
     Args:
         file (File): The file to download.
-        save_path (str): The path to save the folder.
     """
-    folder_path = os.path.join(save_path, file.name)
-
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
+    file.status = FileStatus.DOWNLOADING
+    if not os.path.exists(file.path):
+        os.makedirs(file.path)
     for child in file.children:
-        download_file_recursive(child, folder_path)
+        download_file_recursive(child)
     file.status = FileStatus.DOWNLOADED
 
 
-def check_file(file: File, file_path: str) -> bool:
+def check_file(file: File) -> bool:
     """Check the integrity of a file from Google Drive.
 
     Args:
         file (File): The file to check.
-        file_path (str): The path to the file.
 
     Returns:
         bool: True if the file is correct, False otherwise.
     """
-    if not os.path.exists(file_path):
-        raise Exception(f'File {file_path} does not exist')
+    if not os.path.exists(file.path):
+        raise Exception(f'File {file.path} does not exist')
 
-    with open(file_path, 'rb') as f:
+    with open(file.path, 'rb') as f:
         sha256 = hashlib.sha256(f.read()).hexdigest()
 
     return sha256 == file.sha256
 
 
-def precheck_file(file: File, file_path: str) -> bool:
+def precheck_file(file: File) -> bool:
     """Precheck the integrity of a file from Google Drive.
 
     Args:
         file (File): The file to check.
-        file_path (str): The path to the file.
 
     Returns:
         bool: True if the file is correct, False otherwise.
     """
-    checked = check_file(file, file_path)
+    checked = check_file(file)
     if checked:
         file.status = FileStatus.ALREADY_CHECKED
         file.done_size = file.size
     else:
         file.status = FileStatus.CORRUPTED
-    update_root_progress()
     print_root_file()
     return checked
 
 
-def postcheck_file(file: File, file_path: str) -> bool:
+def postcheck_file(file: File) -> bool:
     """Postcheck the integrity of a file from Google Drive.
 
     Args:
         file (File): The file to check.
-        file_path (str): The path to the file.
 
     Returns:
         bool: True if the file is correct, False otherwise.
     """
-    checked = check_file(file, file_path)
+    checked = check_file(file)
     if checked:
         file.status = FileStatus.CHECKED
         file.done_size = file.size
     else:
         file.status = FileStatus.FAILED
-    update_root_progress()
     print_root_file()
     return checked
 
 
-def download_file_simple(file: File, file_path: str):
+def download_file_simple(file: File):
     """Download a file from Google Drive.
 
     Args:
         file (File): The file to download.
-        file_path (str): The path to save the file.
     """
     request = service.files().get_media(fileId=file.id)
-    with open(file_path, 'wb') as f:
+    with open(file.path, 'wb') as f:
         downloader = MediaIoBaseDownload(f, request)
         done = False
         while not done:
             status, done = downloader.next_chunk()
             file.done_size = status.resumable_progress
-            update_root_progress()
             print_root_file()
     file.status = FileStatus.DOWNLOADED
 
 
-def download_file_with_check(file: File, file_path: str) -> bool:
+def download_file_with_check(file: File) -> bool:
     """Download a file from Google Drive. Check the integrity of the file.
 
     Args:
         file (File): The file to download.
-        file_path (str): The path to save the file.
 
     Returns:  
         bool: True if the file is correct, False otherwise.
     """
-    download_file_simple(file, file_path)
-    return postcheck_file(file, file_path)
+    download_file_simple(file)
+    return postcheck_file(file)
 
 
-def download_file_with_retry(file: File, file_path: str, retry: int) -> bool:
+def download_file_with_retry(file: File, retry: int) -> bool:
     """Download a file from Google Drive. Retry in case of error.
 
     Args:
         file (File): The file to download.
-        file_path (str): The path to save the file.
         retry (int): The number of retries.
 
     Returns:
         bool: True if the file is correct, False otherwise.
     """
     if retry == 0:
-        return download_file_with_check(file, file_path)
+        return download_file_with_check(file)
 
-    if download_file_with_check(file, file_path):
+    if download_file_with_check(file):
         return True
     else:
-        return download_file_with_retry(file, file_path, retry - 1)
+        return download_file_with_retry(file, retry - 1)
 
 
-def download_file(file: File, save_path: str):
+def download_file(file: File):
     """Download a file from Google Drive.
 
     Args:
         file (File): The file to download.
-        save_path (str): The path to save the file in (ie. the folder).
     """
     global service
 
-    file_path = os.path.join(save_path, file.name)
-
-    # precheck
-    exists = os.path.exists(file_path)
-    if exists:
-        file.status = FileStatus.ALREADY_PRESENT
-        file.done_size = file.size
-        update_root_progress()
-        print_root_file()
-
-    precheck = not config['force'] and (config['check'] or config['retry'] > 0)
-    prechecked = False
-    if exists and precheck:
-        prechecked = precheck_file(file, file_path)
-
     # download
-    if config['force'] or not exists or (not (prechecked and precheck) and config['overwrite']):
+    if file.should_download():
+        file.status = FileStatus.DOWNLOADING
         if config['check'] or config['retry'] > 0:
-            download_file_with_retry(file, file_path, config['retry'])
+            download_file_with_retry(file, config['retry'])
         else:
-            download_file_simple(file, file_path)
+            download_file_simple(file)
 
 
-def download_file_recursive(file: File, save_path: str):
+def download_file_recursive(file: File):
     """Download a file from Google Drive.
 
     Args:
         file (File): The file to download.
-        save_path (str, optional): The path to save the file. Defaults to ''.
     """
-    file.status = FileStatus.DOWNLOADING
     if file.type == FileType.FOLDER:
-        download_folder(file, save_path)
+        download_folder(file)
     elif file.type == FileType.FILE:
-        download_file(file, save_path)
+        download_file(file)
 
 
 def main():
@@ -326,15 +326,13 @@ def main():
 
     status = 'scanning'
 
-    root_file = File(config['file_id'])
+    root_file = File(config['file_id'], dirname=config['save_path'])
     scan_file(root_file)
 
-    if not root_file:
-        # TODO: no file found or no permission or ...
-        return
+    # TODO: no file found or no permission or ...
 
     status = 'downloading'
-    download_file_recursive(root_file, config['save_path'])
+    download_file_recursive(root_file)
 
     status = 'done'
     print_root_file()
@@ -361,16 +359,21 @@ def scan_file(file: File):
         file.name = response['name']
         if 'folder' in response['mimeType']:
             file.type = FileType.FOLDER
-            file.size = 0
+            file.set_size(0)
         else:
             file.type = FileType.FILE
-            file.size = int(response['size'])
+            file.set_size(int(response['size']))
         file.children = []
         file.done_size = 0
         file.sha256 = response.get('sha256Checksum', '')
         file.status = FileStatus.PENDING
 
-        if file.type == FileType.FOLDER:
+        if file.type == FileType.FILE:
+            if os.path.exists(file.path):
+                file.status = FileStatus.ALREADY_PRESENT
+                if not config['force'] and (config['check'] or config['retry'] > 0):
+                    precheck_file(file)
+        elif file.type == FileType.FOLDER:
             page_token = None
             while True:
                 # get the children files
@@ -384,7 +387,7 @@ def scan_file(file: File):
 
                 # scan the children files
                 for f in children_files:
-                    child_file = File(f['id'])  # pass by reference to update the root file as well
+                    child_file = File(f['id'], file.path)  # pass by reference to update the root file as well
                     file.children.append(child_file)
                     scan_file(child_file)
 
@@ -392,9 +395,6 @@ def scan_file(file: File):
                 page_token = children_response.get("nextPageToken", None)
                 if page_token is None:
                     break
-
-            # update the size of the folder
-            file.size = sum([child.size for child in file.children])
 
     except HttpError as error:
         print(f"An error occurred: {error}", flush=True)
