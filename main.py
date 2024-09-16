@@ -474,6 +474,7 @@ def main():
 
     parse_args()
 
+    print("\x1b[H\x1b[2J", end='', flush=True)
     root_file = File(config.file_id, dirname=config.save_path)
     root_file.scan()
 
