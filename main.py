@@ -8,7 +8,68 @@ import argparse
 import sys
 
 
+class Size:
+    """A size in bytes."""
+
+    UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+
+    def __init__(self, size: int) -> None:
+        """Initialize the size.
+
+        Args:
+            size (int): The size in bytes.
+        """
+        self.size = size
+
+    def __str__(self) -> str:
+        """Return the size as a string.
+
+        Returns:
+            str: The size as a string.
+        """
+        unit = 0
+        while self.size >= 1024 and unit < len(Size.UNITS) - 1:
+            self.size /= 1024
+            unit += 1
+        return f"{self.size:.2f} {Size.UNITS[unit]}"
+
+
+class Progress:
+    """A progress bar."""
+
+    def __init__(self, progress: float) -> None:
+        """Initialize the progress bar.
+
+        Args:
+            progress (float): The progress between 0 and 1.
+        """
+        self.progress = progress
+
+    @property
+    def progress(self) -> float:
+        return self._progress
+
+    @progress.setter
+    def progress(self, progress: float):
+        if not 0 <= progress <= 1:
+            print(f"warning: progress {progress} is not between 0 and 1", flush=True, file=sys.stderr)
+            progress = max(0, min(progress, 1))
+        self._progress = progress
+
+    def __str__(self) -> str:
+        """Return the progress bar as a string.
+
+        Returns:
+            str: The progress bar as a string.
+        """
+        bar = '━' * int(BAR_LENGTH * self.progress) + ('╾' if self.progress *
+                                                       BAR_LENGTH % 1 >= 0.5 else '─') + '─' * BAR_LENGTH
+        bar = bar[:BAR_LENGTH]
+        return f"{bar} {100*self.progress:.2f}%"
+
+
 class ANSI:
+    """ANSI escape codes."""
     DEFAULT = '\x1b[0m'
     GREY = '\x1b[90m'
     RED = '\x1b[91m'
@@ -21,6 +82,7 @@ class ANSI:
 
 
 class FileStatus:
+    """The status of a file."""
     PENDING = 0
     DOWNLOADING = 1
     DOWNLOADED = 2
@@ -32,6 +94,14 @@ class FileStatus:
 
     @staticmethod
     def ansify(status: int) -> str:
+        """Return the ANSI escape code for the status.
+
+        Args:
+            status (int): The status of the file.
+
+        Returns:
+            str: The ANSI escape code.
+        """
         if status == FileStatus.PENDING:
             return ANSI.CYAN
         elif status == FileStatus.DOWNLOADING:
@@ -53,48 +123,94 @@ class FileStatus:
 
 
 class FileType:
+    """The type of a file."""
     UNKNOWN = -1
     FILE = 0
     FOLDER = 1
 
 
 class File:
-    def __init__(self, id: str, dirname: str):
+    """A file in Google Drive."""
+
+    def __init__(self, id: str, dirname: str) -> None:
+        """Initialize the file.
+
+        Args:
+            id (str): The Google Drive file ID.
+            dirname (str): The directory name to save the file.
+        """
         self.id = id
         self.dirname = dirname
         self.name = ''
-        self._size = 0
+        self._size = Size(0)
         self.type = FileType.UNKNOWN
         self.sha256 = ''
-        self.done_size = 0
-        self.status = FileStatus.PENDING
+        self._progress = Progress(0)
+        self._status = FileStatus.PENDING
         self.children = []
+        self.parent = None
 
-    def set_size(self, size: int):
-        self._size = size
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, status: int):
+        self._status = status
+        self.update()
+
+    def update(self):
+        if self.parent is not None:
+            self.parent.update()
+        else:
+            print('\x1b[0;0H\x1b[J', end='', flush=True)
+            print(self.__str__(), flush=True)
+
+    def child(self, id: str) -> 'File':
+        child = File(id, self.path)
+        self.children.append(child)
+        child.parent = self
+        return child
 
     @property
     def size(self):
         if self.type == FileType.FOLDER:
-            self._size = sum([child.size for child in self.children])
-        return self._size
+            self._size.size = sum([child.size for child in self.children])
+        return self._size.size
 
-    def print(self, indent=''):
-        """Print the file info.
+    @size.setter
+    def size(self, size: int):
+        self._size.size = size
 
-        Args:
-            indent (str, optional): The parent indetation. Defaults to ''.
-        """
-        color = FileStatus.ansify(self.status)
-        text = indent + color + f"{self.name} - {self.formatted_size} {self.formatted_progress}" + ANSI.DEFAULT
-        print(text, flush=True)
-        if indent == '':
-            child_indent = ''
-        else:
-            child_indent = indent[:-2] + ('  ' if indent[-2:] == '└ ' else '│ ')
-        for child_i, child in enumerate(self.children):
-            child_indent_i = '└ ' if child_i == len(self.children) - 1 else '├ '
-            child.print(child_indent + child_indent_i)
+    def __str__(self):
+        """Return file tree as a string."""
+        if self.type == FileType.FILE:
+            color = FileStatus.ansify(self.status)
+            text = color + f"{self.name} - {self._size} {self._progress}" + ANSI.DEFAULT
+            return text
+        elif self.type == FileType.FOLDER:
+            color = FileStatus.ansify(self.status)
+            text = color + f"{self.name}/ - {self._size} {self._progress}" + ANSI.DEFAULT
+            for child_i, child in enumerate(self.children):
+                # add the child text
+                child_text = child.__str__()
+                child_lines = child_text.split('\n')
+                for line_i, line in enumerate(child_lines):
+                    # add the child text with the correct indentation
+                    if child_i == len(self.children) - 1:
+                        if line_i == 0:
+                            indent = '\n└ '
+                        else:
+                            indent = '\n  '
+                    else:
+                        if line_i == 0:
+                            indent = '\n├ '
+                        else:
+                            indent = '\n│ '
+                    text += indent + line
+            return text
+        elif self.type == FileType.UNKNOWN:
+            return f"Unknown file {self.id}"
 
     def should_download(self) -> bool:
         """Check if the file should be downloaded.
@@ -129,8 +245,7 @@ class File:
             done = False
             while not done:
                 status, done = downloader.next_chunk()
-                self.done_size = status.resumable_progress
-                print_root_file()
+                self.progress = status.progress()
 
         self.status = FileStatus.DOWNLOADED
 
@@ -214,11 +329,9 @@ class File:
         checked = self.check_file()
         if checked:
             self.status = FileStatus.ALREADY_CHECKED
-            self.done_size = self.size
+            self.progress = 1
         else:
             self.status = FileStatus.CORRUPTED
-
-        print_root_file()
 
         return checked
 
@@ -231,11 +344,9 @@ class File:
         checked = self.check_file()
         if checked:
             self.status = FileStatus.CHECKED
-            self.done_size = self.size
+            self.progress = 1
         else:
             self.status = FileStatus.FAILED
-
-        print_root_file()
 
         return checked
 
@@ -255,14 +366,14 @@ class File:
             self.name = response['name']
             if 'folder' in response['mimeType']:
                 self.type = FileType.FOLDER
-                self.set_size(0)
+                self.size = 0
             else:
                 self.type = FileType.FILE
-                self.set_size(int(response['size']))
+                self.size = int(response['size'])
             self.children = []
-            self.done_size = 0
             self.sha256 = response.get('sha256Checksum', '')
             self.status = FileStatus.PENDING
+            self.progress = 0
 
             if self.type == FileType.FILE:
                 if os.path.exists(self.path):
@@ -283,8 +394,7 @@ class File:
 
                     # scan the children files
                     for f in children_files:
-                        child_file = File(f['id'], self.path)
-                        self.children.append(child_file)  # add the child first so that the parent is updated
+                        child_file = self.child(f['id'])
                         child_file.scan()
 
                     # break if there are no more children batch
@@ -295,25 +405,24 @@ class File:
         except HttpError as error:
             print(f"An error occurred: {error}", flush=True)
 
-        print_root_file()
-
     @property
-    def path(self):
+    def path(self) -> str:
         return os.path.join(self.dirname, self.name)
 
     @property
-    def formatted_size(self):
-        return format_size(self.size)
+    def progress(self) -> float:
+        if self.size == 0:
+            return 1
 
-    @property
-    def formatted_progress(self):
-        return format_progress(self.progress)
-
-    @property
-    def progress(self):
         if self.type == FileType.FOLDER:
-            self.done_size = sum([child.done_size for child in self.children])
-        return self.done_size / self.size if self.size > 0 else 1.0
+            self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
+
+        return self._progress.progress
+
+    @progress.setter
+    def progress(self, progress: float):
+        self._progress.progress = progress
+        self.update()
 
 
 def parse_args():
@@ -348,69 +457,18 @@ service = build("drive", "v3", credentials=creds)
 root_file = None
 BAR_LENGTH = 4
 
-status = 'idle'
-
 
 def main():
     global root_file, status, config
 
     parse_args()
 
-    status = 'scanning'
-
     root_file = File(config['file_id'], dirname=config['save_path'])
     root_file.scan()
 
     # TODO: no file found or no permission or ...
 
-    status = 'downloading'
     root_file.download_recursive()
-
-    status = 'done'
-    print_root_file()
-
-
-def print_root_file():
-    global root_file, status
-    if not root_file:
-        raise Exception('Root file is not set')  # TODO: better error handling
-    print('\x1b[0;0H\x1b[J', end='', flush=True)
-    print(f"Status: {status}", flush=True)
-    root_file.print()
-
-
-def format_size(size: float) -> str:
-    """Format the size in bytes to a human readable format.
-
-    Args:
-        size (float): The size in bytes.
-
-    Returns:
-        str: The size in a human readable format.
-    """
-    units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB']
-    unit = 0
-    while size >= 1024 and unit < len(units) - 1:
-        size /= 1024
-        unit += 1
-    return f"{size:.2f} {units[unit]}"
-
-
-def format_progress(progress: float) -> str:
-    """Format the progress bar.
-
-    Args:
-        progress (float): The progress between 0 and 1.
-
-    Returns:
-        str: The progress bar.
-    """
-    if progress < 0 or progress > 1:
-        print(f"warning: progress {progress} is not between 0 and 1", flush=True, file=sys.stderr)
-        progress = max(0, min(progress, 1))
-    bar = '━' * int(BAR_LENGTH * progress) + ('╾' if progress * BAR_LENGTH % 1 >= 0.5 else '─') + '─' * BAR_LENGTH
-    bar = bar[:BAR_LENGTH]
-    return f"{bar} {100*progress:.2f}%"
 
 
 if __name__ == "__main__":
