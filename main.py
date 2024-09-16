@@ -25,7 +25,6 @@ class FileStatus:
     DOWNLOADED = 2
     ALREADY_PRESENT = 3
     CORRUPTED = 4
-    WARNING = 5
     FAILED = 6
     CHECKED = 7
     ALREADY_CHECKED = 8
@@ -39,11 +38,9 @@ class FileStatus:
         elif status == FileStatus.DOWNLOADED:
             return ANSI.GREEN
         elif status == FileStatus.ALREADY_PRESENT:
-            return ANSI.GREEN
+            return ANSI.YELLOW
         elif status == FileStatus.CORRUPTED:
             return ANSI.RED
-        elif status == FileStatus.WARNING:
-            return ANSI.YELLOW
         elif status == FileStatus.FAILED:
             return ANSI.RED
         elif status == FileStatus.CHECKED:
@@ -70,7 +67,7 @@ class File:
         self.done_size = 0
         self.status = FileStatus.PENDING
         self.children = []
-    
+
     def print(self, indent=''):
         """Print the file info.
 
@@ -287,13 +284,21 @@ def download_file(file: File, save_path: str):
 
     file_path = os.path.join(save_path, file.name)
 
-    # pre check
-    precheck = False
-    if not config['force'] and (config['check'] or config['overwrite'] or config['retry'] > 0):
-        precheck = precheck_file(file, file_path)
+    # precheck
+    exists = os.path.exists(file_path)
+    if exists:
+        file.status = FileStatus.ALREADY_PRESENT
+        file.done_size = file.size
+        update_root_progress()
+        print_root_file()
+
+    precheck = not config['force'] and (config['check'] or config['retry'] > 0)
+    prechecked = False
+    if exists and precheck:
+        prechecked = precheck_file(file, file_path)
 
     # download
-    if config['force'] or (not precheck and config['overwrite']):
+    if config['force'] or not exists or (not (prechecked and precheck) and config['overwrite']):
         if config['check'] or config['retry'] > 0:
             download_file_with_retry(file, file_path, config['retry'])
         else:
