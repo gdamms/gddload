@@ -5,6 +5,7 @@ from googleapiclient.errors import HttpError
 import os
 import hashlib
 import argparse
+import sys
 
 
 class ANSI:
@@ -117,6 +118,185 @@ class File:
 
         raise Exception(f'Unexpected status {self.status}')
 
+    def download(self):
+        """Download a file from Google Drive."""
+        self.status = FileStatus.DOWNLOADING
+
+        request = service.files().get_media(fileId=self.id)
+        with open(self.path, 'wb') as f:
+            downloader = MediaIoBaseDownload(f, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                self.done_size = status.resumable_progress
+                print_root_file()
+
+        self.status = FileStatus.DOWNLOADED
+
+    def download_file(self):
+        """Download a file from Google Drive."""
+        global service
+
+        if self.should_download():
+            self.status = FileStatus.DOWNLOADING
+            if config['check'] or config['retry'] > 0:
+                self.download_with_retry(config['retry'])
+            else:
+                self.download()
+
+    def download_with_check(self) -> bool:
+        """Download a file from Google Drive. Check the integrity of the file.
+
+        Returns:
+            bool: True if the file is correct, False otherwise.
+        """
+        self.download()
+        return self.postcheck_file()
+
+    def download_with_retry(self, retry: int) -> bool:
+        """Download a file from Google Drive. Retry in case of error.
+
+        Args:
+            retry (int): The number of retries.
+
+        Returns:
+            bool: True if the file is correct, False otherwise.
+        """
+        if retry == 0:
+            return self.download_with_check()
+
+        if self.download_with_check():
+            return True
+        else:
+            return self.download_with_retry(retry - 1)
+
+    def download_folder(self):
+        """Download a folder from Google Drive."""
+        assert self.type == FileType.FOLDER
+
+        self.status = FileStatus.DOWNLOADING
+
+        if not os.path.exists(self.path):
+            os.makedirs(self.path)
+
+        for child in self.children:
+            child.download_recursive()
+
+        self.status = FileStatus.DOWNLOADED
+
+    def download_recursive(self):
+        """Recursively download a file from Google Drive."""
+        if self.type == FileType.FOLDER:
+            self.download_folder()
+        elif self.type == FileType.FILE:
+            self.download_file()
+
+    def check_file(self) -> bool:
+        """Check the integrity of a file from Google Drive.
+
+        Returns:
+            bool: True if the file is correct, False otherwise.
+        """
+        assert os.path.exists(self.path)
+
+        with open(self.path, 'rb') as f:
+            sha256 = hashlib.sha256(f.read()).hexdigest()
+
+        return sha256 == self.sha256
+
+    def precheck_file(self) -> bool:
+        """Precheck the integrity of a file from Google Drive.
+
+        Returns:
+            bool: True if the file is correct, False otherwise.
+        """
+        checked = self.check_file()
+        if checked:
+            self.status = FileStatus.ALREADY_CHECKED
+            self.done_size = self.size
+        else:
+            self.status = FileStatus.CORRUPTED
+
+        print_root_file()
+
+        return checked
+
+    def postcheck_file(self) -> bool:
+        """Postcheck the integrity of a file from Google Drive.
+
+        Returns:
+            bool: True if the file is correct, False otherwise.
+        """
+        checked = self.check_file()
+        if checked:
+            self.status = FileStatus.CHECKED
+            self.done_size = self.size
+        else:
+            self.status = FileStatus.FAILED
+
+        print_root_file()
+
+        return checked
+
+    def scan(self):
+        """Scan a file from Google Drive."""
+        global service
+
+        try:
+            # get the file attributes
+            response = service.files().get(
+                fileId=self.id,
+                fields='id,name,mimeType,size,sha256Checksum',
+            ).execute()
+
+            # update the file attributes
+            self.id = response['id']
+            self.name = response['name']
+            if 'folder' in response['mimeType']:
+                self.type = FileType.FOLDER
+                self.set_size(0)
+            else:
+                self.type = FileType.FILE
+                self.set_size(int(response['size']))
+            self.children = []
+            self.done_size = 0
+            self.sha256 = response.get('sha256Checksum', '')
+            self.status = FileStatus.PENDING
+
+            if self.type == FileType.FILE:
+                if os.path.exists(self.path):
+                    self.status = FileStatus.ALREADY_PRESENT
+                    if not config['force'] and (config['check'] or config['retry'] > 0):
+                        self.precheck_file()
+            elif self.type == FileType.FOLDER:
+                page_token = None
+                while True:
+                    # get the children files
+                    children_response = service.files().list(
+                        q=f"'{self.id}' in parents",
+                        spaces="drive",
+                        fields="nextPageToken, files(id)",
+                        pageToken=page_token,
+                    ).execute()
+                    children_files = children_response.get("files", [])
+
+                    # scan the children files
+                    for f in children_files:
+                        child_file = File(f['id'], self.path)
+                        self.children.append(child_file)  # add the child first so that the parent is updated
+                        child_file.scan()
+
+                    # break if there are no more children batch
+                    page_token = children_response.get("nextPageToken", None)
+                    if page_token is None:
+                        break
+
+        except HttpError as error:
+            print(f"An error occurred: {error}", flush=True)
+
+        print_root_file()
+
     @property
     def path(self):
         return os.path.join(self.dirname, self.name)
@@ -171,154 +351,6 @@ BAR_LENGTH = 4
 status = 'idle'
 
 
-def download_folder(file: File):
-    """Download a folder from Google Drive.
-
-    Args:
-        file (File): The file to download.
-    """
-    file.status = FileStatus.DOWNLOADING
-    if not os.path.exists(file.path):
-        os.makedirs(file.path)
-    for child in file.children:
-        download_file_recursive(child)
-    file.status = FileStatus.DOWNLOADED
-
-
-def check_file(file: File) -> bool:
-    """Check the integrity of a file from Google Drive.
-
-    Args:
-        file (File): The file to check.
-
-    Returns:
-        bool: True if the file is correct, False otherwise.
-    """
-    if not os.path.exists(file.path):
-        raise Exception(f'File {file.path} does not exist')
-
-    with open(file.path, 'rb') as f:
-        sha256 = hashlib.sha256(f.read()).hexdigest()
-
-    return sha256 == file.sha256
-
-
-def precheck_file(file: File) -> bool:
-    """Precheck the integrity of a file from Google Drive.
-
-    Args:
-        file (File): The file to check.
-
-    Returns:
-        bool: True if the file is correct, False otherwise.
-    """
-    checked = check_file(file)
-    if checked:
-        file.status = FileStatus.ALREADY_CHECKED
-        file.done_size = file.size
-    else:
-        file.status = FileStatus.CORRUPTED
-    print_root_file()
-    return checked
-
-
-def postcheck_file(file: File) -> bool:
-    """Postcheck the integrity of a file from Google Drive.
-
-    Args:
-        file (File): The file to check.
-
-    Returns:
-        bool: True if the file is correct, False otherwise.
-    """
-    checked = check_file(file)
-    if checked:
-        file.status = FileStatus.CHECKED
-        file.done_size = file.size
-    else:
-        file.status = FileStatus.FAILED
-    print_root_file()
-    return checked
-
-
-def download_file_simple(file: File):
-    """Download a file from Google Drive.
-
-    Args:
-        file (File): The file to download.
-    """
-    request = service.files().get_media(fileId=file.id)
-    with open(file.path, 'wb') as f:
-        downloader = MediaIoBaseDownload(f, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-            file.done_size = status.resumable_progress
-            print_root_file()
-    file.status = FileStatus.DOWNLOADED
-
-
-def download_file_with_check(file: File) -> bool:
-    """Download a file from Google Drive. Check the integrity of the file.
-
-    Args:
-        file (File): The file to download.
-
-    Returns:  
-        bool: True if the file is correct, False otherwise.
-    """
-    download_file_simple(file)
-    return postcheck_file(file)
-
-
-def download_file_with_retry(file: File, retry: int) -> bool:
-    """Download a file from Google Drive. Retry in case of error.
-
-    Args:
-        file (File): The file to download.
-        retry (int): The number of retries.
-
-    Returns:
-        bool: True if the file is correct, False otherwise.
-    """
-    if retry == 0:
-        return download_file_with_check(file)
-
-    if download_file_with_check(file):
-        return True
-    else:
-        return download_file_with_retry(file, retry - 1)
-
-
-def download_file(file: File):
-    """Download a file from Google Drive.
-
-    Args:
-        file (File): The file to download.
-    """
-    global service
-
-    # download
-    if file.should_download():
-        file.status = FileStatus.DOWNLOADING
-        if config['check'] or config['retry'] > 0:
-            download_file_with_retry(file, config['retry'])
-        else:
-            download_file_simple(file)
-
-
-def download_file_recursive(file: File):
-    """Download a file from Google Drive.
-
-    Args:
-        file (File): The file to download.
-    """
-    if file.type == FileType.FOLDER:
-        download_folder(file)
-    elif file.type == FileType.FILE:
-        download_file(file)
-
-
 def main():
     global root_file, status, config
 
@@ -327,78 +359,14 @@ def main():
     status = 'scanning'
 
     root_file = File(config['file_id'], dirname=config['save_path'])
-    scan_file(root_file)
+    root_file.scan()
 
     # TODO: no file found or no permission or ...
 
     status = 'downloading'
-    download_file_recursive(root_file)
+    root_file.download_recursive()
 
     status = 'done'
-    print_root_file()
-
-
-def scan_file(file: File):
-    """Scan a file from Google Drive.
-
-    Args:
-        file (File): The file to scan.
-    """
-
-    global service
-
-    try:
-        # get the file attributes
-        response = service.files().get(
-            fileId=file.id,
-            fields='id,name,mimeType,size,sha256Checksum',
-        ).execute()
-
-        # update the file attributes
-        file.id = response['id']
-        file.name = response['name']
-        if 'folder' in response['mimeType']:
-            file.type = FileType.FOLDER
-            file.set_size(0)
-        else:
-            file.type = FileType.FILE
-            file.set_size(int(response['size']))
-        file.children = []
-        file.done_size = 0
-        file.sha256 = response.get('sha256Checksum', '')
-        file.status = FileStatus.PENDING
-
-        if file.type == FileType.FILE:
-            if os.path.exists(file.path):
-                file.status = FileStatus.ALREADY_PRESENT
-                if not config['force'] and (config['check'] or config['retry'] > 0):
-                    precheck_file(file)
-        elif file.type == FileType.FOLDER:
-            page_token = None
-            while True:
-                # get the children files
-                children_response = service.files().list(
-                    q=f"'{file.id}' in parents",
-                    spaces="drive",
-                    fields="nextPageToken, files(id)",
-                    pageToken=page_token,
-                ).execute()
-                children_files = children_response.get("files", [])
-
-                # scan the children files
-                for f in children_files:
-                    child_file = File(f['id'], file.path)  # pass by reference to update the root file as well
-                    file.children.append(child_file)
-                    scan_file(child_file)
-
-                # break if there are no more children batch
-                page_token = children_response.get("nextPageToken", None)
-                if page_token is None:
-                    break
-
-    except HttpError as error:
-        print(f"An error occurred: {error}", flush=True)
-
     print_root_file()
 
 
@@ -420,7 +388,7 @@ def format_size(size: float) -> str:
     Returns:
         str: The size in a human readable format.
     """
-    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB']
     unit = 0
     while size >= 1024 and unit < len(units) - 1:
         size /= 1024
@@ -437,7 +405,9 @@ def format_progress(progress: float) -> str:
     Returns:
         str: The progress bar.
     """
-    # TODO: check progress is between 0 and 1: clip or exception?
+    if progress < 0 or progress > 1:
+        print(f"warning: progress {progress} is not between 0 and 1", flush=True, file=sys.stderr)
+        progress = max(0, min(progress, 1))
     bar = '━' * int(BAR_LENGTH * progress) + ('╾' if progress * BAR_LENGTH % 1 >= 0.5 else '─') + '─' * BAR_LENGTH
     bar = bar[:BAR_LENGTH]
     return f"{bar} {100*progress:.2f}%"
