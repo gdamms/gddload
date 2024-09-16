@@ -8,6 +8,22 @@ import argparse
 import sys
 
 
+class Config:
+    """The configuration of the program."""
+    def __init__(self, args: argparse.Namespace) -> None:
+        """Initialize the configuration.
+
+        Args:
+            args (argparse.Namespace): The command line arguments.
+        """
+        self.file_id = args.file_id
+        self.save_path = args.save_path
+        self.check = args.check or args.retry > 0
+        self.overwrite = args.overwrite
+        self.force = args.force
+        self.retry = args.retry
+
+
 class Size:
     """A size in bytes."""
 
@@ -223,14 +239,14 @@ class File:
         """
         assert self.type == FileType.FILE
 
-        if config['force']:
+        if config.force:
             return True
 
         if self.status == FileStatus.PENDING:
             return True
 
         if self.status == FileStatus.CORRUPTED or self.status == FileStatus.ALREADY_PRESENT:
-            return config['overwrite']
+            return config.overwrite
 
         if self.status == FileStatus.ALREADY_CHECKED:
             return False
@@ -258,8 +274,8 @@ class File:
 
         if self.should_download():
             self.status = FileStatus.DOWNLOADING
-            if config['check'] or config['retry'] > 0:
-                self.download_with_retry(config['retry'])
+            if config.check:
+                self.download_with_retry(config.retry)
             else:
                 self.download()
 
@@ -381,7 +397,7 @@ class File:
             if self.type == FileType.FILE:
                 if os.path.exists(self.path):
                     self.status = FileStatus.ALREADY_PRESENT
-                    if not config['force'] and (config['check'] or config['retry'] > 0):
+                    if not config.force and config.check:
                         self.precheck_file()
             elif self.type == FileType.FOLDER:
                 page_token = None
@@ -443,13 +459,7 @@ def parse_args():
     args = parser.parse_args()
 
     global config
-    config = {}
-    config['file_id'] = args.file_id
-    config['save_path'] = args.save_path
-    config['check'] = args.check
-    config['overwrite'] = args.overwrite
-    config['force'] = args.force
-    config['retry'] = args.retry
+    config = Config(args)
 
 
 creds = service_account.Credentials.from_service_account_file(
@@ -457,15 +467,14 @@ creds = service_account.Credentials.from_service_account_file(
     scopes=['https://www.googleapis.com/auth/drive']
 )
 service = build("drive", "v3", credentials=creds)
-root_file = None
 
 
 def main():
-    global root_file, status, config
+    global config
 
     parse_args()
 
-    root_file = File(config['file_id'], dirname=config['save_path'])
+    root_file = File(config.file_id, dirname=config.save_path)
     root_file.scan()
 
     # TODO: no file found or no permission or ...
