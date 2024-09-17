@@ -3,8 +3,6 @@ from src.file import File
 
 
 def main():
-    global config
-
     config = Config.parse_args()
 
     print("\x1b[H\x1b[2J", end='', flush=True)  # clear the screen (but not the scrollback buffer, ie. ctrl+l)

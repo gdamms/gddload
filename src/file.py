@@ -114,6 +114,35 @@ class File:
         self._status = status
         self.update()
 
+    @property
+    def size(self):
+        if self.type == FileType.FOLDER:
+            self._size.size = sum([child.size for child in self.children])
+        return self._size.size
+
+    @size.setter
+    def size(self, size: int):
+        self._size.size = size
+
+    @property
+    def progress(self) -> float:
+        if self.size == 0:
+            return 1
+
+        if self.type == FileType.FOLDER:
+            self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
+
+        return self._progress.progress
+
+    @progress.setter
+    def progress(self, progress: float):
+        self._progress.progress = progress
+        self.update()
+
+    @property
+    def path(self) -> str:
+        return os.path.join(self.dirname, self.name)
+
     def update(self):
         if self.parent is not None:
             self.parent.update()
@@ -126,16 +155,6 @@ class File:
         self.children.append(child)
         child.parent = self
         return child
-
-    @property
-    def size(self):
-        if self.type == FileType.FOLDER:
-            self._size.size = sum([child.size for child in self.children])
-        return self._size.size
-
-    @size.setter
-    def size(self, size: int):
-        self._size.size = size
 
     def __str__(self):
         """Return file tree as a string."""
@@ -359,22 +378,3 @@ class File:
 
         except HttpError as error:
             print(f"An error occurred: {error}", flush=True)
-
-    @property
-    def path(self) -> str:
-        return os.path.join(self.dirname, self.name)
-
-    @property
-    def progress(self) -> float:
-        if self.size == 0:
-            return 1
-
-        if self.type == FileType.FOLDER:
-            self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
-
-        return self._progress.progress
-
-    @progress.setter
-    def progress(self, progress: float):
-        self._progress.progress = progress
-        self.update()
