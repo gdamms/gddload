@@ -32,7 +32,11 @@ class Config:
 
     @staticmethod
     def parse_args() -> 'Config':
-        """Parse the command line arguments."""
+        """Parse the command line arguments.
+
+        Returns:
+            Config: The configuration of the program
+        """
         parser = argparse.ArgumentParser(description='Download files from Google Drive')
         parser.add_argument('file_id', type=str, help='The Google Drive file ID')
         parser.add_argument('--save_path', type=str, default='.', help='The path to save the files')
