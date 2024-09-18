@@ -1,5 +1,8 @@
 import argparse
 
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
 
 class Config:
     """The configuration of the program."""
@@ -29,6 +32,11 @@ class Config:
         self.overwrite = overwrite
         self.force = force
         self.retry = retry
+        self.creds = Credentials.from_service_account_file(
+            'key.json',
+            scopes=['https://www.googleapis.com/auth/drive'],
+        )
+        self.service = build("drive", "v3") # , credentials=self.creds
 
     @staticmethod
     def parse_args() -> 'Config':

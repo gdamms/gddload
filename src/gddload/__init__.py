@@ -1,0 +1,1 @@
+from .gddload import main

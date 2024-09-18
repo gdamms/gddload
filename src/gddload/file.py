@@ -3,19 +3,10 @@ import hashlib
 
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
-from src.config import Config
-from src.size import Size
-from src.progress import Progress
-
-
-creds = service_account.Credentials.from_service_account_file(
-    'key.json',
-    scopes=['https://www.googleapis.com/auth/drive']
-)
-service = build("drive", "v3", credentials=creds)
+from .config import Config
+from .size import Size
+from .progress import Progress
 
 
 class ANSI:
@@ -210,11 +201,9 @@ class File:
 
     def download(self):
         """Download a file from Google Drive."""
-        global service
-
         self.status = FileStatus.DOWNLOADING
 
-        request = service.files().get_media(fileId=self.id)
+        request = self.config.service.files().get_media(fileId=self.id)
         with open(self.path, 'wb') as f:
             downloader = MediaIoBaseDownload(f, request)
 
@@ -326,11 +315,9 @@ class File:
 
     def scan(self):
         """Scan a file from Google Drive."""
-        global service
-
         try:
             # get the file attributes
-            response = service.files().get(
+            response = self.config.service.files().get(
                 fileId=self.id,
                 fields='id,name,mimeType,size,sha256Checksum',
             ).execute()
@@ -358,7 +345,7 @@ class File:
                 page_token = None
                 while True:
                     # get the children files
-                    children_response = service.files().list(
+                    children_response = self.config.service.files().list(
                         q=f"'{self.id}' in parents",
                         spaces="drive",
                         fields="nextPageToken, files(id)",
