@@ -64,6 +64,23 @@ class FileStatus:
         else:
             return ANSI.DEFAULT
 
+    @staticmethod
+    def requires_details(status: int) -> bool:
+        """Return True if the status requires details.
+
+        Args:
+            status (int): The status of the file.
+
+        Returns:
+            bool: True if the status requires details.
+        """
+        return (
+            status == FileStatus.CORRUPTED or
+            status == FileStatus.FAILED or
+            status == FileStatus.ALREADY_PRESENT or
+            status == FileStatus.DOWNLOADING
+        )
+
 
 class FileType:
     """The type of a file."""
@@ -156,23 +173,26 @@ class File:
         elif self.type == FileType.FOLDER:
             color = FileStatus.ansify(self.status)
             text = color + f"{self.name}/ - {self._size} {self._progress}" + ANSI.DEFAULT
-            for child_i, child in enumerate(self.children):
-                # add the child text
-                child_text = child.__str__()
-                child_lines = child_text.split('\n')
-                for line_i, line in enumerate(child_lines):
-                    # add the child text with the correct indentation
-                    if child_i == len(self.children) - 1:
-                        if line_i == 0:
-                            indent = '\n└ '
+            if FileStatus.requires_details(self.status):
+                for child_i, child in enumerate(self.children):
+                    # add the child text
+                    child_text = child.__str__()
+                    child_lines = child_text.split('\n')
+                    for line_i, line in enumerate(child_lines):
+                        # add the child text with the correct indentation
+                        if child_i == len(self.children) - 1:
+                            if line_i == 0:
+                                indent = '\n└ '
+                            else:
+                                indent = '\n  '
                         else:
-                            indent = '\n  '
-                    else:
-                        if line_i == 0:
-                            indent = '\n├ '
-                        else:
-                            indent = '\n│ '
-                    text += indent + line
+                            if line_i == 0:
+                                indent = '\n├ '
+                            else:
+                                indent = '\n│ '
+                        text += indent + line
+            else:
+                text += ' ...'
             return text
         elif self.type == FileType.UNKNOWN:
             return f"Unknown file {self.id}"
