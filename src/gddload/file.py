@@ -34,6 +34,7 @@ class FileStatus:
     FAILED = 6
     CHECKED = 7
     ALREADY_CHECKED = 8
+    SCANNING = 9
 
     @staticmethod
     def ansify(status: int) -> str:
@@ -61,6 +62,8 @@ class FileStatus:
             return ANSI.GREEN
         elif status == FileStatus.ALREADY_CHECKED:
             return ANSI.GREEN
+        elif status == FileStatus.SCANNING:
+            return ANSI.CYAN
         else:
             return ANSI.DEFAULT
 
@@ -78,7 +81,8 @@ class FileStatus:
             status == FileStatus.CORRUPTED or
             status == FileStatus.FAILED or
             status == FileStatus.ALREADY_PRESENT or
-            status == FileStatus.DOWNLOADING
+            status == FileStatus.DOWNLOADING or
+            status == FileStatus.SCANNING
         )
 
 
@@ -352,7 +356,7 @@ class File:
                 self.size = int(response['size'])
             self.children = []
             self.sha256 = response.get('sha256Checksum', '')
-            self.status = FileStatus.PENDING
+            self.status = FileStatus.SCANNING
             self.progress = 0
 
             if self.type == FileType.FILE:
@@ -384,6 +388,10 @@ class File:
 
                 # update the size of the folder
                 self.size = sum([child.size for child in self.children])
+
+            # update the status to PENDING if status did not change
+            if self.status == FileStatus.SCANNING:
+                self.status = FileStatus.PENDING
 
         except HttpError as error:
             print(f"An error occurred: {error}", flush=True)
