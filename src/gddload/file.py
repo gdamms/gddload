@@ -110,7 +110,7 @@ class File:
         self.sha256 = ''
         self._progress = Progress(0)
         self._status = FileStatus.PENDING
-        self.children = []
+        self.children: list[File] = []
         self.parent = None
 
     @property
@@ -123,7 +123,7 @@ class File:
         self.update()
 
     @property
-    def size(self):
+    def size(self) -> int:
         if self.type == FileType.FOLDER:
             self._size.size = sum([child.size for child in self.children])
         return self._size.size
@@ -136,9 +136,8 @@ class File:
     def progress(self) -> Progress:
         if self.size == 0:
             self._progress.progress = 1
-
         elif self.type == FileType.FOLDER:
-            self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
+            self._progress.progress = sum([child.progress.progress * child.size for child in self.children]) / self.size
 
         return self._progress
 
