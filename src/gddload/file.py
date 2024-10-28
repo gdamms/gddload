@@ -363,5 +363,8 @@ class File:
                     if page_token is None:
                         break
 
+                # update the size of the folder
+                self.size = sum([child.size for child in self.children])
+
         except HttpError as error:
             print(f"An error occurred: {error}", flush=True)
