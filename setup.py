@@ -5,7 +5,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='gddload',
-    version='0.1.5',
+    version='0.1.6',
     license="MIT",
     description='A simple package to download files from Google Drive',
     long_description=open('README.md').read(),

@@ -137,7 +137,7 @@ class File:
         if self.size == 0:
             self._progress.progress = 1
 
-        if self.type == FileType.FOLDER:
+        elif self.type == FileType.FOLDER:
             self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
 
         return self._progress
