@@ -133,14 +133,14 @@ class File:
         self._size.size = size
 
     @property
-    def progress(self) -> float:
+    def progress(self) -> Progress:
         if self.size == 0:
-            return 1
+            self._progress.progress = 1
 
         if self.type == FileType.FOLDER:
             self._progress.progress = sum([child.progress * child.size for child in self.children]) / self.size
 
-        return self._progress.progress
+        return self._progress
 
     @progress.setter
     def progress(self, progress: float):
@@ -168,11 +168,11 @@ class File:
         """Return file tree as a string."""
         if self.type == FileType.FILE:
             color = FileStatus.ansify(self.status)
-            text = color + f"{self.name} - {self._size} {self._progress}" + ANSI.DEFAULT
+            text = color + f"{self.name} - {self._size} {self.progress}" + ANSI.DEFAULT
             return text
         elif self.type == FileType.FOLDER:
             color = FileStatus.ansify(self.status)
-            text = color + f"{self.name}/ - {self._size} {self._progress}" + ANSI.DEFAULT
+            text = color + f"{self.name}/ - {self._size} {self.progress}" + ANSI.DEFAULT
             if FileStatus.requires_details(self.status):
                 for child_i, child in enumerate(self.children):
                     # add the child text
