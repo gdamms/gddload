@@ -122,8 +122,10 @@ class File:
 
     @property
     def status(self) -> int:
-        if self.type == FileType.FOLDER:
+        if self.type == FileType.FOLDER and len(self.children) > 0:
             self._status = max([child.status for child in self.children])
+        elif self.type == FileType.FOLDER:
+            self._status = FileStatus.UNDEFINED
         return self._status
 
     @status.setter
