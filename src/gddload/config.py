@@ -36,7 +36,7 @@ class Config:
             'key.json',
             scopes=['https://www.googleapis.com/auth/drive'],
         )
-        self.service = build("drive", "v3") # , credentials=self.creds
+        self.service = build("drive", "v3", credentials=self.creds)
 
     @staticmethod
     def parse_args() -> 'Config':
