@@ -26,15 +26,16 @@ class ANSI:
 class FileStatus:
     """The status of a file."""
 
-    PENDING = 0
-    DOWNLOADING = 1
-    DOWNLOADED = 2
-    ALREADY_PRESENT = 3
-    CORRUPTED = 4
-    FAILED = 6
-    CHECKED = 7
-    ALREADY_CHECKED = 8
-    SCANNING = 9
+    UNDEFINED = 0
+    SCANNING = 1
+    PENDING = 2
+    ALREADY_CHECKED = 3
+    DOWNLOADED = 4
+    CHECKED = 5
+    DOWNLOADING = 6
+    ALREADY_PRESENT = 7
+    CORRUPTED = 8
+    FAILED = 9
 
     @staticmethod
     def ansify(status: int) -> str:
@@ -64,6 +65,8 @@ class FileStatus:
             return ANSI.GREEN
         elif status == FileStatus.SCANNING:
             return ANSI.CYAN
+        elif status == FileStatus.UNDEFINED:
+            return ANSI.GREY
         else:
             return ANSI.DEFAULT
 
@@ -113,12 +116,14 @@ class File:
         self.type = FileType.UNKNOWN
         self.sha256 = ''
         self._progress = Progress(0)
-        self._status = FileStatus.PENDING
+        self._status = FileStatus.UNDEFINED
         self.children: list[File] = []
         self.parent = None
 
     @property
-    def status(self):
+    def status(self) -> int:
+        if self.type == FileType.FOLDER:
+            self._status = max([child.status for child in self.children])
         return self._status
 
     @status.setter
@@ -276,15 +281,11 @@ class File:
         """Download a folder from Google Drive."""
         assert self.type == FileType.FOLDER
 
-        self.status = FileStatus.DOWNLOADING
-
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
         for child in self.children:
             child.download_recursive()
-
-        self.status = FileStatus.DOWNLOADED
 
     def download_recursive(self):
         """Recursively download a file from Google Drive."""
